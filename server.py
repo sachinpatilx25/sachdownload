@@ -49,6 +49,9 @@ try:
                 return info
             raise ExtractorError('No video formats found!')
 
+        # Log webpage preview for debugging
+        self.to_screen(f"[DEBUG_HTML_LEN] {len(webpage)} preview: {webpage[:200]}")
+
         title = self._html_search_regex(
             [r'<h1[^>]*>([^<]+)</h1>', r'<title[^>]*>([^<]+)</title>'],
             webpage, 'title', default='video'
