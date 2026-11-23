@@ -5,18 +5,26 @@ import glob
 import shutil
 import asyncio
 import urllib.parse
+import tempfile
 import requests
-import imageio_ffmpeg
 import yt_dlp
-import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads_cache")
-os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+IS_VERCEL = bool(os.environ.get("VERCEL")) or "LAMBDA_TASK_ROOT" in os.environ or "AWS_LAMBDA_FUNCTION_NAME" in os.environ
+
+if IS_VERCEL:
+    DOWNLOADS_DIR = os.path.join(tempfile.gettempdir(), "downloads_cache")
+else:
+    DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads_cache")
+
+try:
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+except Exception:
+    pass
 
 app = FastAPI(title="Website Video Downloader")
 
@@ -38,6 +46,16 @@ HEADERS = {
         "Chrome/120.0.0.0 Safari/537.36"
     )
 }
+
+def get_ffmpeg():
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return exe
+    except Exception:
+        pass
+    return shutil.which("ffmpeg")
 
 def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r'[\\/*?:"<>|]', "", name).strip()
@@ -87,7 +105,7 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         task_id = str(uuid.uuid4())[:8]
 
     file_id = task_id
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_exe = get_ffmpeg()
     headers_with_ref = {**HEADERS, "Referer": url}
     progress_hook = make_progress_hook(task_id)
 
@@ -133,11 +151,11 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                                     "percent_str": f"{pct}%"
                                 })
 
-            direct_dest = os.path.join(BASE_DIR, base_name)
-            try:
-                shutil.copy2(out_path, direct_dest)
-            except Exception:
-                pass
+            if not IS_VERCEL:
+                try:
+                    shutil.copy2(out_path, os.path.join(BASE_DIR, base_name))
+                except Exception:
+                    pass
 
             downloaded_files[file_id] = {"path": out_path, "filename": base_name}
             tasks_progress[task_id].update({
@@ -156,7 +174,6 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
     ydl_opts = {
         "outtmpl": out_template,
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "ffmpeg_location": ffmpeg_exe,
         "quiet": False,
         "no_warnings": False,
         "noplaylist": True,
@@ -165,6 +182,8 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         "http_headers": headers_with_ref,
         "progress_hooks": [progress_hook],
     }
+    if ffmpeg_exe:
+        ydl_opts["ffmpeg_location"] = ffmpeg_exe
 
     last_error = ""
     try:
@@ -177,12 +196,13 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         if matches:
             saved_file = matches[0]
             display_name = os.path.basename(saved_file).replace(f"{file_id}_", "", 1)
-            direct_dest = os.path.join(BASE_DIR, display_name)
-            try:
-                shutil.copy2(saved_file, direct_dest)
-                print(f"[SUCCESS] Video saved to Downloads: {direct_dest}")
-            except Exception as e:
-                print(f"[INFO] Could not copy to Downloads root: {e}")
+            
+            if not IS_VERCEL:
+                try:
+                    shutil.copy2(saved_file, os.path.join(BASE_DIR, display_name))
+                    print(f"[SUCCESS] Video saved to Downloads: {display_name}")
+                except Exception as e:
+                    print(f"[INFO] Could not copy to Downloads root: {e}")
 
             downloaded_files[file_id] = {"path": saved_file, "filename": display_name}
             tasks_progress[task_id].update({
@@ -197,7 +217,7 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         last_error = str(ydl_err)
         print(f"[WARN] yt-dlp primary extraction failed: {last_error}")
 
-    # 3. Enhanced Fallback: Parse HTML & Embedded Scripts
+    # 3. Fallback: Parse HTML & Embedded Scripts
     try:
         print("[INFO] Attempting enhanced fallback scraping...")
         resp = requests.get(url, headers=headers_with_ref, timeout=12)
@@ -205,18 +225,14 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         html = resp.text
 
         candidates = []
-        # Media tags
         for m in re.finditer(r'<(?:video|source)\b[^>]*\bsrc=["\']([^"\']+)["\']', html, re.I):
             candidates.append(m.group(1))
-        # Iframes
         for m in re.finditer(r'<iframe\b[^>]*\bsrc=["\']([^"\']+)["\']', html, re.I):
             candidates.append(m.group(1))
-        # OpenGraph video
         for m in re.finditer(r'<meta\b[^>]*\bproperty=["\']og:video(?::url)?["\'][^>]*\bcontent=["\']([^"\']+)["\']', html, re.I):
             candidates.append(m.group(1))
         for m in re.finditer(r'<meta\b[^>]*\bcontent=["\']([^"\']+)["\'][^>]*\bproperty=["\']og:video(?::url)?["\']', html, re.I):
             candidates.append(m.group(1))
-        # Script media stream links (.m3u8, .mp4, .webm)
         for m in re.finditer(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|webm)(?:\?[^\s"\'<>]*)?', html, re.I):
             candidates.append(m.group(0))
 
@@ -232,11 +248,11 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                     if matches:
                         saved_file = matches[0]
                         display_name = os.path.basename(saved_file).replace(f"{file_id}_", "", 1)
-                        direct_dest = os.path.join(BASE_DIR, display_name)
-                        try:
-                            shutil.copy2(saved_file, direct_dest)
-                        except Exception:
-                            pass
+                        if not IS_VERCEL:
+                            try:
+                                shutil.copy2(saved_file, os.path.join(BASE_DIR, display_name))
+                            except Exception:
+                                pass
 
                         downloaded_files[file_id] = {"path": saved_file, "filename": display_name}
                         tasks_progress[task_id].update({
@@ -264,11 +280,17 @@ class DownloadRequest(BaseModel):
 
 @app.get("/")
 async def serve_root():
-    return FileResponse(os.path.join(BASE_DIR, "index.html"), media_type="text/html")
+    index_path = os.path.join(BASE_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path, media_type="text/html")
+    return HTMLResponse("<h1>SachDownload is running</h1>")
 
 @app.get("/index.html")
 async def serve_index():
-    return FileResponse(os.path.join(BASE_DIR, "index.html"), media_type="text/html")
+    index_path = os.path.join(BASE_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path, media_type="text/html")
+    return HTMLResponse("<h1>SachDownload is running</h1>")
 
 @app.get("/icon.svg")
 async def serve_icon():
@@ -302,7 +324,6 @@ async def api_download_start(payload: DownloadRequest):
         "error": None
     }
 
-    # Run in background thread so progress endpoint can immediately respond
     asyncio.create_task(asyncio.to_thread(download_video_sync, url, task_id))
     return {"success": True, "task_id": task_id}
 
@@ -366,8 +387,5 @@ async def direct_download(request: Request):
         return HTMLResponse(f"<p>Error downloading video: {e}</p><p><a href='/'>Go back</a></p>", status_code=500)
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Website Video Downloader Server running on http://localhost:8000")
-    print("Open http://localhost:8000 in your browser.")
-    print("=" * 60)
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
