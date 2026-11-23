@@ -438,27 +438,6 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
 class DownloadRequest(BaseModel):
     url: str
 
-@app.get("/api/debug_inspect")
-async def debug_inspect(url: str):
-    import requests
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://google.com/",
-        "Cookie": "cookie_accept_v2=%7B%22e%22%3A1%2C%22f%22%3A1%2C%22t%22%3A1%2C%22a%22%3A1%7D; age_verified=1; is_age_verified=1; confirmed_age=1; shouldConfirmSession=false"
-    }
-    r = requests.get(url, headers=headers)
-    has_age_wall = "age-verification-wall" in r.text
-    has_player = "xplayerSettings" in r.text
-    has_video_model = "videoModel" in r.text
-    title_matches = [line.strip() for line in r.text.splitlines() if '<title' in line]
-    return {
-        "status_code": r.status_code,
-        "has_age_wall": has_age_wall,
-        "has_player": has_player,
-        "has_video_model": has_video_model,
-        "title": title_matches[0] if title_matches else None
-    }
-
 @app.get("/")
 async def serve_root():
     index_path = os.path.join(BASE_DIR, "index.html")
