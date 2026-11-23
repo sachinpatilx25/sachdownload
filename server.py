@@ -28,20 +28,6 @@ except Exception:
 
 app = FastAPI(title="Website Video Downloader")
 
-@app.middleware("http")
-async def debug_path_middleware(request: Request, call_next):
-    # Check if this is the debug endpoint
-    if "debug" in request.url.path:
-        return JSONResponse({
-            "path": request.url.path,
-            "raw_path": request.scope.get("raw_path", b"").decode(),
-            "headers": dict(request.headers),
-            "query": dict(request.query_params)
-        })
-    response = await call_next(request)
-    response.headers["X-Debug-Path"] = request.url.path
-    return response
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
