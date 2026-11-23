@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SACH.IN</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <form id="downloadForm" action="http://localhost:8000/download" method="POST">
+    <input type="text" name="url" placeholder="add url for download videos" required>
+    <button type="submit">DOWNLOAD</button>
+  </form>
+  <br>
+  <progress id="progressBar" value="0" max="100" hidden></progress>
+  <p id="status"></p>
+  <div id="downloadLink"></div>
+
+  <script>
+    const form = document.getElementById('downloadForm');
+    const status = document.getElementById('status');
+    const progressBar = document.getElementById('progressBar');
+    const downloadLink = document.getElementById('downloadLink');
+    const button = form.querySelector('button');
+
+    const API_BASE = (window.location.protocol === 'file:') ? 'http://localhost:8000' : '';
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const url = form.url.value.trim();
+      if (!url) return;
+
+      button.disabled = true;
+      downloadLink.innerHTML = '';
+      progressBar.hidden = false;
+      progressBar.value = 0;
+      status.textContent = 'Connecting and extracting video... 0%';
+
+      try {
+        const startRes = await fetch(`${API_BASE}/api/download/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: url })
+        });
+
+        const startData = await startRes.json();
+        if (!startRes.ok || !startData.task_id) {
+          throw new Error(startData.error || 'Failed to start download.');
+        }
+
+        const taskId = startData.task_id;
+
+        const interval = setInterval(async () => {
+          try {
+            const progRes = await fetch(`${API_BASE}/api/download/progress/${taskId}`);
+            const prog = await progRes.json();
+
+            if (prog.status === 'downloading') {
+              progressBar.value = prog.percent;
+              let txt = `Downloading: ${prog.percent_str}`;
+              if (prog.speed) txt += ` (${prog.speed})`;
+              if (prog.eta) txt += ` - ETA: ${prog.eta}`;
+              status.textContent = txt;
+            } else if (prog.status === 'merging') {
+              progressBar.value = 100;
+              status.textContent = 'Merging video and audio... 100%';
+            } else if (prog.status === 'finished') {
+              clearInterval(interval);
+              button.disabled = false;
+              progressBar.value = 100;
+              status.textContent = `Completed 100%! Saved to Downloads folder: ${prog.filename}`;
+
+              const fileUrl = `${API_BASE}/api/file/${encodeURIComponent(prog.file_id)}`;
+              downloadLink.innerHTML = `<p><a href="${fileUrl}" download="${prog.filename}">Click here to save video file manually</a></p>`;
+              window.location.href = fileUrl;
+            } else if (prog.status === 'error') {
+              clearInterval(interval);
+              button.disabled = false;
+              progressBar.hidden = true;
+              status.textContent = `Error: ${prog.error}`;
+            }
+          } catch (pollErr) {
+            // keep polling
+          }
+        }, 500);
+
+      } catch (err) {
+        button.disabled = false;
+        progressBar.hidden = true;
+        status.textContent = 'Error: ' + err.message;
+      }
+    };
+  </script>
+</body>
+</html>

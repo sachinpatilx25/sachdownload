@@ -1,0 +1,19 @@
+# Cache and temp files
+__pycache__/
+*.py[cod]
+*$py.class
+downloads_cache/
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.part
+*.ytdl
+
+# Environment
+.env
+.venv
+env/
+venv/
+.idea/
+.vscode/

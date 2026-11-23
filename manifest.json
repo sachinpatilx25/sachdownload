@@ -1,0 +1,34 @@
+{
+  "id": "sach-in",
+  "name": "SACH.IN",
+  "description": "",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["search"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Search",
+      "short_name": "Search",
+      "description": "search",
+      "url": "./index.html#search"
+    },
+    {
+      "name": "SACH.IN",
+      "short_name": "SACH.IN",
+      "description": "search",
+      "url": "./index.html#wl"
+    }
+  ]
+}
