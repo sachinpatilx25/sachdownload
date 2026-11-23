@@ -418,6 +418,35 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
 class DownloadRequest(BaseModel):
     url: str
 
+@app.get("/api/debug_inspect")
+async def debug_inspect(url: str):
+    import yt_dlp
+    import traceback
+    logs = []
+    class MyLogger:
+        def debug(self, msg): logs.append(f"DEBUG: {msg}")
+        def warning(self, msg): logs.append(f"WARN: {msg}")
+        def error(self, msg): logs.append(f"ERR: {msg}")
+    ydl_opts = {"logger": MyLogger(), "quiet": True, "skip_download": True}
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = info.get("formats", [])
+            return {
+                "success": True,
+                "title": info.get("title"),
+                "formats_count": len(formats),
+                "formats": [{"id": f.get("format_id"), "ext": f.get("ext"), "url": f.get("url")[:80]} for f in formats[:5]],
+                "logs": logs
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "logs": logs
+        }
+
 @app.get("/")
 async def serve_root():
     index_path = os.path.join(BASE_DIR, "index.html")
