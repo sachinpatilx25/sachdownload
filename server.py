@@ -307,6 +307,7 @@ async def serve_manifest():
     raise HTTPException(status_code=404)
 
 @app.post("/api/download/start")
+@app.post("/download/start")
 async def api_download_start(payload: DownloadRequest):
     url = payload.url.strip()
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -328,6 +329,7 @@ async def api_download_start(payload: DownloadRequest):
     return {"success": True, "task_id": task_id}
 
 @app.get("/api/download/progress/{task_id}")
+@app.get("/download/progress/{task_id}")
 async def api_download_progress(task_id: str):
     prog = tasks_progress.get(task_id)
     if not prog:
@@ -347,6 +349,7 @@ async def api_download(payload: DownloadRequest):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 @app.get("/api/file/{file_id}")
+@app.get("/file/{file_id}")
 async def get_downloaded_file(file_id: str):
     info = downloaded_files.get(file_id)
     if not info:
