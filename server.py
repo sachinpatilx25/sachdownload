@@ -290,6 +290,11 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
             # On Vercel, extract video URL directly to prevent 15s serverless timeout and 4.5MB payload limits
             with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True, "http_headers": headers_with_ref}) as ydl:
                 info = ydl.extract_info(url, download=False)
+                if "entries" in info:
+                    entries = [e for e in info.get("entries", []) if e]
+                    if entries:
+                        info = entries[0]
+
                 formats = info.get("formats", [])
                 best_direct_url = None
                 # Prefer direct MP4 format
@@ -300,6 +305,8 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                         break
                 if not best_direct_url and formats:
                     best_direct_url = formats[-1].get("url")
+                if not best_direct_url:
+                    best_direct_url = info.get("url")
 
                 if best_direct_url:
                     title = sanitize_filename(info.get("title") or "video")
