@@ -8,8 +8,9 @@ import urllib.parse
 import tempfile
 import requests
 import yt_dlp
+from yt_dlp.utils import ExtractorError
 
-# Patch known yt-dlp site extractor bugs (e.g. KeyError: 'videoModel' on XHamster)
+# Patch known yt-dlp site extractor bugs (e.g. KeyError: 'videoModel' or 'No video formats found!' on XHamster)
 try:
     from yt_dlp.extractor.xhamster import XHamsterIE
     _orig_xh_real_extract = XHamsterIE._real_extract
@@ -27,14 +28,61 @@ try:
             return res
 
         self._parse_json = patched_parse_json
-        return _orig_xh_real_extract(self, url)
+
+        try:
+            return _orig_xh_real_extract(self, url)
+        except Exception as exc:
+            # If the site extractor raises 'No video formats found!' or fails, scrape HTML directly
+            desktop_url = re.sub(r'^(https?://(?:.+?\.)?)m\.', r'\1', url)
+            mobj = self._match_valid_url(url)
+            video_id = (mobj.group('id') or mobj.group('id_2')) if mobj else "video"
+
+            webpage = self._download_webpage(desktop_url, video_id, fatal=False)
+            if not webpage:
+                raise exc
+
+            title = self._html_search_regex(
+                [r'<h1[^>]*>([^<]+)</h1>', r'<title[^>]*>([^<]+)</title>'],
+                webpage, 'title', default='video'
+            )
+
+            unescaped = webpage.replace(r'\/', '/')
+            formats = []
+            seen = set()
+
+            matches = re.findall(r'https?://[^\s"\'<>]+\.(?:mp4|m3u8)(?:\?[^\s"\'<>]*)?', unescaped)
+            for m in matches:
+                if re.search(r'(\.t\.mp4|thumb-|/preview/)', m):
+                    continue
+                if m in seen:
+                    continue
+                seen.add(m)
+                if ".m3u8" in m:
+                    m3u8_formats = self._extract_m3u8_formats(m, video_id, 'mp4', entry_protocol='m3u8_native', fatal=False)
+                    formats.extend(m3u8_formats)
+                else:
+                    formats.append({
+                        'url': m,
+                        'format_id': 'http-mp4',
+                        'ext': 'mp4',
+                        'http_headers': {'Referer': url}
+                    })
+
+            if not formats:
+                raise exc
+
+            return {
+                'id': video_id,
+                'title': title,
+                'formats': formats
+            }
 
     XHamsterIE._real_extract = _safe_xh_real_extract
 except Exception:
     pass
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -125,7 +173,7 @@ def make_progress_hook(task_id: str):
             })
     return hook
 
-def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str, str]:
+def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str, str, str | None]:
     if not task_id:
         task_id = str(uuid.uuid4())[:8]
 
@@ -142,6 +190,7 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         "eta": "",
         "filename": "",
         "file_id": file_id,
+        "direct_url": None,
         "error": None
     }
 
@@ -150,13 +199,24 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         head = requests.head(url, headers=headers_with_ref, allow_redirects=True, timeout=7)
         content_type = head.headers.get("content-type", "").lower()
         if "video/" in content_type:
-            total_size = int(head.headers.get("content-length", 0))
             parsed_path = urllib.parse.urlparse(head.url).path
             base_name = os.path.basename(parsed_path) or f"video_{file_id}.mp4"
             base_name = sanitize_filename(urllib.parse.unquote(base_name))
             if not os.path.splitext(base_name)[1]:
                 base_name += ".mp4"
 
+            if IS_VERCEL:
+                tasks_progress[task_id].update({
+                    "status": "finished",
+                    "percent": 100.0,
+                    "percent_str": "100%",
+                    "filename": base_name,
+                    "file_id": file_id,
+                    "direct_url": url
+                })
+                return file_id, "", base_name, url
+
+            total_size = int(head.headers.get("content-length", 0))
             out_filename = f"{file_id}_{base_name}"
             out_path = os.path.join(DOWNLOADS_DIR, out_filename)
 
@@ -176,11 +236,10 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                                     "percent_str": f"{pct}%"
                                 })
 
-            if not IS_VERCEL:
-                try:
-                    shutil.copy2(out_path, os.path.join(BASE_DIR, base_name))
-                except Exception:
-                    pass
+            try:
+                shutil.copy2(out_path, os.path.join(BASE_DIR, base_name))
+            except Exception:
+                pass
 
             downloaded_files[file_id] = {"path": out_path, "filename": base_name}
             tasks_progress[task_id].update({
@@ -188,9 +247,10 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                 "percent": 100.0,
                 "percent_str": "100%",
                 "filename": base_name,
-                "file_id": file_id
+                "file_id": file_id,
+                "direct_url": None
             })
-            return file_id, out_path, base_name
+            return file_id, out_path, base_name, None
     except Exception:
         pass
 
@@ -213,6 +273,34 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
     last_error = ""
     try:
         print(f"\n[INFO] Starting video extraction for: {url}")
+        if IS_VERCEL:
+            # On Vercel, extract video URL directly to prevent 15s serverless timeout and 4.5MB payload limits
+            with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True, "http_headers": headers_with_ref}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                formats = info.get("formats", [])
+                best_direct_url = None
+                # Prefer direct MP4 format
+                for f in reversed(formats):
+                    f_url = f.get("url")
+                    if f_url and f.get("ext") == "mp4" and "m3u8" not in f_url:
+                        best_direct_url = f_url
+                        break
+                if not best_direct_url and formats:
+                    best_direct_url = formats[-1].get("url")
+
+                if best_direct_url:
+                    title = sanitize_filename(info.get("title") or "video")
+                    filename = f"{title}.mp4"
+                    tasks_progress[task_id].update({
+                        "status": "finished",
+                        "percent": 100.0,
+                        "percent_str": "100%",
+                        "filename": filename,
+                        "file_id": file_id,
+                        "direct_url": best_direct_url
+                    })
+                    return file_id, "", filename, best_direct_url
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
@@ -235,14 +323,15 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                 "percent": 100.0,
                 "percent_str": "100%",
                 "filename": display_name,
-                "file_id": file_id
+                "file_id": file_id,
+                "direct_url": None
             })
-            return file_id, saved_file, display_name
+            return file_id, saved_file, display_name, None
     except Exception as ydl_err:
         last_error = str(ydl_err)
         print(f"[WARN] yt-dlp primary extraction failed: {last_error}")
 
-    # 3. Fallback: Parse HTML & Embedded Scripts
+    # 3. Fallback: Parse HTML & Embedded Media Streams
     try:
         print("[INFO] Attempting enhanced fallback scraping...")
         resp = requests.get(url, headers=headers_with_ref, timeout=12)
@@ -259,18 +348,31 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
             candidates.append(m.group(1))
         for m in re.finditer(r'<meta\b[^>]*\bcontent=["\']([^"\']+)["\'][^>]*\bproperty=["\']og:video(?::url)?["\']', html, re.I):
             candidates.append(m.group(1))
-        # Search unescaped HTML for streaming playlist and video files
         for m in re.finditer(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|webm)(?:\?[^\s"\'<>]*)?', html_unescaped, re.I):
             candidate_url = m.group(0)
-            # Filter out thumbnail previews (.t.mp4 or thumb-)
             if not re.search(r'(?:\.t\.mp4|thumb-|/preview/)', candidate_url, re.I):
                 candidates.append(candidate_url)
+
+        title_m = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
+        page_title = sanitize_filename(title_m.group(1) if title_m else "video")
 
         for cand in candidates:
             resolved = urllib.parse.urljoin(url, cand.strip().replace(r"\/", "/"))
             if resolved != url:
                 try:
                     print(f"[INFO] Trying candidate stream: {resolved}")
+                    if IS_VERCEL:
+                        filename = f"{page_title}.mp4"
+                        tasks_progress[task_id].update({
+                            "status": "finished",
+                            "percent": 100.0,
+                            "percent_str": "100%",
+                            "filename": filename,
+                            "file_id": file_id,
+                            "direct_url": resolved
+                        })
+                        return file_id, "", filename, resolved
+
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([resolved])
                     pattern = os.path.join(DOWNLOADS_DIR, f"{file_id}_*")
@@ -290,15 +392,23 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
                             "percent": 100.0,
                             "percent_str": "100%",
                             "filename": display_name,
-                            "file_id": file_id
+                            "file_id": file_id,
+                            "direct_url": None
                         })
-                        return file_id, saved_file, display_name
+                        return file_id, saved_file, display_name, None
                 except Exception:
                     continue
     except Exception as scrape_err:
         print(f"[WARN] Fallback scraping failed: {scrape_err}")
 
+    # 4. Error reporting with clear instructions
     clean_err = last_error.split("\n")[0] if last_error else "No downloadable video stream detected."
+    if "No video formats found" in clean_err or "403" in clean_err:
+        if IS_VERCEL:
+            clean_err = "This website blocks cloud/serverless IPs (Vercel). Please run this download on your computer via http://localhost:8000."
+        else:
+            clean_err = "No video stream found for this URL. Please verify the URL."
+
     tasks_progress[task_id].update({
         "status": "error",
         "error": clean_err
@@ -352,8 +462,17 @@ async def api_download_start(payload: DownloadRequest):
         "eta": "",
         "filename": "",
         "file_id": task_id,
+        "direct_url": None,
         "error": None
     }
+
+    if IS_VERCEL:
+        # On Vercel, run directly so serverless function doesn't freeze background tasks
+        try:
+            file_id, filepath, filename, direct_url = await asyncio.to_thread(download_video_sync, url, task_id)
+            return {"success": True, "task_id": task_id, "direct_url": direct_url, "filename": filename}
+        except Exception as e:
+            return JSONResponse({"success": False, "task_id": task_id, "error": str(e)}, status_code=500)
 
     asyncio.create_task(asyncio.to_thread(download_video_sync, url, task_id))
     return {"success": True, "task_id": task_id}
@@ -373,8 +492,8 @@ async def api_download(payload: DownloadRequest):
         return JSONResponse({"success": False, "error": "Please provide a valid URL starting with http:// or https://"}, status_code=400)
 
     try:
-        file_id, filepath, filename = await asyncio.to_thread(download_video_sync, url)
-        return {"success": True, "file_id": file_id, "filename": filename}
+        file_id, filepath, filename, direct_url = await asyncio.to_thread(download_video_sync, url)
+        return {"success": True, "file_id": file_id, "filename": filename, "direct_url": direct_url}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -410,7 +529,9 @@ async def direct_download(request: Request):
         return HTMLResponse("<p>Error: No URL provided. <a href='/'>Go back</a></p>", status_code=400)
 
     try:
-        file_id, filepath, filename = await asyncio.to_thread(download_video_sync, url)
+        file_id, filepath, filename, direct_url = await asyncio.to_thread(download_video_sync, url)
+        if direct_url:
+            return RedirectResponse(direct_url)
         return FileResponse(
             filepath,
             filename=filename,

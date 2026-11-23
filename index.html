@@ -8,10 +8,11 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <form id="downloadForm" action="http://localhost:8000/download" method="POST">
+  <form id="downloadForm" action="/download" method="POST">
     <input type="text" name="url" placeholder="add url for download videos" required>
     <button type="submit">DOWNLOAD</button>
   </form>
+  <p><small>Local Downloader (Unrestricted): <a href="http://localhost:8000">http://localhost:8000</a></small></p>
   <br>
   <progress id="progressBar" value="0" max="100" hidden></progress>
   <p id="status"></p>
@@ -45,8 +46,19 @@
         });
 
         const startData = await startRes.json();
-        if (!startRes.ok || !startData.task_id) {
+        if (!startRes.ok || (!startData.task_id && !startData.direct_url)) {
           throw new Error(startData.error || 'Failed to start download.');
+        }
+
+        // Direct stream URL returned immediately (e.g. on Vercel)
+        if (startData.direct_url) {
+          button.disabled = false;
+          progressBar.value = 100;
+          const fname = startData.filename || 'video.mp4';
+          status.textContent = `Completed 100%! Ready to save: ${fname}`;
+          downloadLink.innerHTML = `<p><a href="${startData.direct_url}" download="${fname}" target="_blank">Click here to save video file directly</a></p>`;
+          window.location.href = startData.direct_url;
+          return;
         }
 
         const taskId = startData.task_id;
@@ -69,16 +81,22 @@
               clearInterval(interval);
               button.disabled = false;
               progressBar.value = 100;
-              status.textContent = `Completed 100%! Saved to Downloads folder: ${prog.filename}`;
 
-              const fileUrl = `${API_BASE}/api/file/${encodeURIComponent(prog.file_id)}`;
-              downloadLink.innerHTML = `<p><a href="${fileUrl}" download="${prog.filename}">Click here to save video file manually</a></p>`;
-              window.location.href = fileUrl;
+              if (prog.direct_url) {
+                status.textContent = `Completed 100%! Ready to save: ${prog.filename}`;
+                downloadLink.innerHTML = `<p><a href="${prog.direct_url}" download="${prog.filename}" target="_blank">Click here to save video file directly</a></p>`;
+                window.location.href = prog.direct_url;
+              } else {
+                status.textContent = `Completed 100%! Saved to Downloads folder: ${prog.filename}`;
+                const fileUrl = `${API_BASE}/api/file/${encodeURIComponent(prog.file_id)}`;
+                downloadLink.innerHTML = `<p><a href="${fileUrl}" download="${prog.filename}">Click here to save video file manually</a></p>`;
+                window.location.href = fileUrl;
+              }
             } else if (prog.status === 'error') {
               clearInterval(interval);
               button.disabled = false;
               progressBar.hidden = true;
-              status.textContent = `Error: ${prog.error}`;
+              status.innerHTML = `Error: ${prog.error}`;
             }
           } catch (pollErr) {
             // keep polling
@@ -88,7 +106,7 @@
       } catch (err) {
         button.disabled = false;
         progressBar.hidden = true;
-        status.textContent = 'Error: ' + err.message;
+        status.innerHTML = 'Error: ' + err.message;
       }
     };
   </script>
