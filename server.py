@@ -29,53 +29,62 @@ try:
 
         self._parse_json = patched_parse_json
 
+        info = None
         try:
-            return _orig_xh_real_extract(self, url)
-        except Exception as exc:
-            # If the site extractor raises 'No video formats found!' or fails, scrape HTML directly
-            desktop_url = re.sub(r'^(https?://(?:.+?\.)?)m\.', r'\1', url)
-            mobj = self._match_valid_url(url)
-            video_id = (mobj.group('id') or mobj.group('id_2')) if mobj else "video"
+            info = _orig_xh_real_extract(self, url)
+        except Exception:
+            pass
 
-            webpage = self._download_webpage(desktop_url, video_id, fatal=False)
-            if not webpage:
-                raise exc
+        if info and info.get("formats"):
+            return info
 
-            title = self._html_search_regex(
-                [r'<h1[^>]*>([^<]+)</h1>', r'<title[^>]*>([^<]+)</title>'],
-                webpage, 'title', default='video'
-            )
+        # If the site extractor returned empty formats or failed, scrape HTML directly
+        desktop_url = re.sub(r'^(https?://(?:.+?\.)?)m\.', r'\1', url)
+        mobj = self._match_valid_url(url)
+        video_id = (mobj.group('id') or mobj.group('id_2')) if mobj else "video"
 
-            unescaped = webpage.replace(r'\/', '/')
-            formats = []
-            seen = set()
+        webpage = self._download_webpage(desktop_url, video_id, fatal=False)
+        if not webpage:
+            if info:
+                return info
+            raise ExtractorError('No video formats found!')
 
-            matches = re.findall(r'https?://[^\s"\'<>]+\.(?:mp4|m3u8)(?:\?[^\s"\'<>]*)?', unescaped)
-            for m in matches:
-                if re.search(r'(\.t\.mp4|thumb-|/preview/)', m):
-                    continue
-                if m in seen:
-                    continue
-                seen.add(m)
-                if ".m3u8" in m:
-                    m3u8_formats = self._extract_m3u8_formats(m, video_id, 'mp4', entry_protocol='m3u8_native', fatal=False)
+        title = self._html_search_regex(
+            [r'<h1[^>]*>([^<]+)</h1>', r'<title[^>]*>([^<]+)</title>'],
+            webpage, 'title', default='video'
+        )
+
+        unescaped = webpage.replace(r'\/', '/')
+        formats = []
+        seen = set()
+
+        matches = re.findall(r'https?://[^\s"\'<>]+\.(?:mp4|m3u8)(?:\?[^\s"\'<>]*)?', unescaped)
+        for m in matches:
+            if re.search(r'(\.t\.mp4|thumb-|/preview/)', m):
+                continue
+            if m in seen:
+                continue
+            seen.add(m)
+            if ".m3u8" in m:
+                m3u8_formats = self._extract_m3u8_formats(m, video_id, 'mp4', entry_protocol='m3u8_native', fatal=False)
+                if m3u8_formats:
                     formats.extend(m3u8_formats)
-                else:
-                    formats.append({
-                        'url': m,
-                        'format_id': 'http-mp4',
-                        'ext': 'mp4',
-                        'http_headers': {'Referer': url}
-                    })
+            else:
+                formats.append({
+                    'url': m,
+                    'format_id': 'http-mp4',
+                    'ext': 'mp4',
+                    'http_headers': {'Referer': url}
+                })
 
-            if not formats:
-                raise exc
+        if not formats and info:
+            return info
 
-            return {
-                'id': video_id,
-                'title': title,
-                'formats': formats
-            }
+        return {
+            'id': video_id,
+            'title': title,
+            'formats': formats
+        }
 
     XHamsterIE._real_extract = _safe_xh_real_extract
 except Exception:
