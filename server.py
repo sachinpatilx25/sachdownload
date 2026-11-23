@@ -8,6 +8,31 @@ import urllib.parse
 import tempfile
 import requests
 import yt_dlp
+
+# Patch known yt-dlp site extractor bugs (e.g. KeyError: 'videoModel' on XHamster)
+try:
+    from yt_dlp.extractor.xhamster import XHamsterIE
+    _orig_xh_real_extract = XHamsterIE._real_extract
+
+    def _safe_xh_real_extract(self, url):
+        orig_parse_json = self._parse_json
+
+        def patched_parse_json(*args, **kwargs):
+            res = orig_parse_json(*args, **kwargs)
+            if isinstance(res, dict):
+                if "videoModel" not in res or not isinstance(res.get("videoModel"), dict):
+                    res["videoModel"] = res.get("videoEntity") or res.get("xplayerSettings") or {}
+                if "title" not in res["videoModel"]:
+                    res["videoModel"]["title"] = res.get("videoTitle") or res.get("title") or "video"
+            return res
+
+        self._parse_json = patched_parse_json
+        return _orig_xh_real_extract(self, url)
+
+    XHamsterIE._real_extract = _safe_xh_real_extract
+except Exception:
+    pass
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -223,6 +248,7 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
         resp = requests.get(url, headers=headers_with_ref, timeout=12)
         resp.raise_for_status()
         html = resp.text
+        html_unescaped = html.replace(r"\/", "/")
 
         candidates = []
         for m in re.finditer(r'<(?:video|source)\b[^>]*\bsrc=["\']([^"\']+)["\']', html, re.I):
@@ -233,8 +259,12 @@ def download_video_sync(url: str, task_id: str | None = None) -> tuple[str, str,
             candidates.append(m.group(1))
         for m in re.finditer(r'<meta\b[^>]*\bcontent=["\']([^"\']+)["\'][^>]*\bproperty=["\']og:video(?::url)?["\']', html, re.I):
             candidates.append(m.group(1))
-        for m in re.finditer(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|webm)(?:\?[^\s"\'<>]*)?', html, re.I):
-            candidates.append(m.group(0))
+        # Search unescaped HTML for streaming playlist and video files
+        for m in re.finditer(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4|webm)(?:\?[^\s"\'<>]*)?', html_unescaped, re.I):
+            candidate_url = m.group(0)
+            # Filter out thumbnail previews (.t.mp4 or thumb-)
+            if not re.search(r'(?:\.t\.mp4|thumb-|/preview/)', candidate_url, re.I):
+                candidates.append(candidate_url)
 
         for cand in candidates:
             resolved = urllib.parse.urljoin(url, cand.strip().replace(r"\/", "/"))
