@@ -62,6 +62,7 @@ try:
         seen = set()
 
         matches = re.findall(r'https?://[^\s"\'<>]+\.(?:mp4|m3u8)(?:\?[^\s"\'<>]*)?', unescaped)
+        self.to_screen(f"[DEBUG_MATCHES] count: {len(matches)} items: {matches[:10]}")
         for m in matches:
             if re.search(r'(\.t\.mp4|thumb-|/preview/)', m):
                 continue
