@@ -433,32 +433,18 @@ class DownloadRequest(BaseModel):
 
 @app.get("/api/debug_inspect")
 async def debug_inspect(url: str):
-    import yt_dlp
-    import traceback
-    logs = []
-    class MyLogger:
-        def debug(self, msg): logs.append(f"DEBUG: {msg}")
-        def warning(self, msg): logs.append(f"WARN: {msg}")
-        def error(self, msg): logs.append(f"ERR: {msg}")
-    ydl_opts = {"logger": MyLogger(), "quiet": True, "skip_download": True}
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            formats = info.get("formats", [])
-            return {
-                "success": True,
-                "title": info.get("title"),
-                "formats_count": len(formats),
-                "formats": [{"id": f.get("format_id"), "ext": f.get("ext"), "url": f.get("url")[:80]} for f in formats[:5]],
-                "logs": logs
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "logs": logs
-        }
+    import requests
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://google.com/"
+    }
+    r = requests.get(url, headers=headers)
+    return {
+        "status_code": r.status_code,
+        "url": r.url,
+        "headers": dict(r.headers),
+        "html_snippet": r.text[:2000]
+    }
 
 @app.get("/")
 async def serve_root():
