@@ -28,6 +28,12 @@ except Exception:
 
 app = FastAPI(title="Website Video Downloader")
 
+@app.middleware("http")
+async def debug_path_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Debug-Path"] = request.url.path
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
