@@ -6,109 +6,349 @@
   <title>SACH.IN</title>
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="manifest" href="manifest.json">
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --line: #272c38;
+      --text: #e8eaf0;
+      --muted: #9aa3b2;
+      --accent: #4f8cff;
+      --danger: #ff7b7b;
+      --field: #0f1218;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f5f8;
+        --card: #ffffff;
+        --line: #e1e4ea;
+        --text: #14171f;
+        --muted: #5b6475;
+        --accent: #2f6df6;
+        --danger: #c62828;
+        --field: #f7f8fa;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 680px; margin: 0 auto; padding: 28px 16px 48px; }
+    h1 { font-size: 24px; margin: 0 0 6px; }
+    .lead { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+    form { display: flex; flex-direction: column; gap: 10px; }
+    input[type="url"] {
+      width: 100%;
+      font: inherit;
+      color: var(--text);
+      background: var(--field);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 13px 14px;
+    }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    button, .btn {
+      font: inherit;
+      font-weight: 600;
+      min-height: 44px;
+      padding: 0 16px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+    }
+    button.primary, .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #status { margin: 14px 0 8px; min-height: 22px; color: var(--muted); font-size: 14px; }
+    #status.err { color: var(--danger); }
+    progress { width: 100%; height: 10px; margin: 4px 0 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      margin-top: 12px;
+    }
+    .meta-title { font-weight: 700; margin-bottom: 4px; overflow-wrap: anywhere; }
+    .meta-sub { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+    .fmt-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .fmt-item {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--field);
+    }
+    .fmt-label { font-weight: 600; font-size: 14px; }
+    .fmt-info { color: var(--muted); font-size: 12px; }
+    .fmt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    @media (min-width: 560px) {
+      form { flex-direction: row; }
+      form input[type="url"] { flex: 1; }
+    }
+  </style>
 </head>
 <body>
+<main>
+  <h1>SACH.IN</h1>
+  <p class="lead">Paste any video page or direct stream URL to inspect qualities and download.</p>
+
   <form id="downloadForm" action="/download" method="POST">
-    <input type="text" name="url" placeholder="add url for download videos" required>
-    <button type="submit">DOWNLOAD</button>
+    <input id="urlInput" type="url" name="url" placeholder="https://..." required>
+    <div class="btn-row">
+      <button class="primary" id="inspectBtn" type="submit">Find Video</button>
+      <button id="quickBtn" type="button">Quick Best</button>
+    </div>
   </form>
-  <p><small>Local Downloader (Unrestricted): <a href="http://localhost:8000">http://localhost:8000</a></small></p>
-  <br>
+
   <progress id="progressBar" value="0" max="100" hidden></progress>
-  <p id="status"></p>
-  <div id="downloadLink"></div>
+  <p id="status" role="status" aria-live="polite"></p>
+  <div id="results"></div>
+  <p class="lead" style="margin-top:24px;">Local unrestricted server: <a href="http://localhost:8000">http://localhost:8000</a></p>
+</main>
 
-  <script>
-    const form = document.getElementById('downloadForm');
-    const status = document.getElementById('status');
-    const progressBar = document.getElementById('progressBar');
-    const downloadLink = document.getElementById('downloadLink');
-    const button = form.querySelector('button');
+<script>
+  const form = document.getElementById('downloadForm');
+  const urlInput = document.getElementById('urlInput');
+  const inspectBtn = document.getElementById('inspectBtn');
+  const quickBtn = document.getElementById('quickBtn');
+  const statusEl = document.getElementById('status');
+  const progressBar = document.getElementById('progressBar');
+  const resultsEl = document.getElementById('results');
 
-    const API_BASE = (window.location.protocol === 'file:') ? 'http://localhost:8000' : '';
+  const API_BASE = (window.location.protocol === 'file:') ? 'http://localhost:8000' : '';
 
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      const url = form.url.value.trim();
-      if (!url) return;
+  function setStatus(text, isErr = false) {
+    statusEl.textContent = text || '';
+    statusEl.className = isErr ? 'err' : '';
+  }
 
-      button.disabled = true;
-      downloadLink.innerHTML = '';
-      progressBar.hidden = false;
-      progressBar.value = 0;
-      status.textContent = 'Connecting and extracting video... 0%';
+  function fmtSize(bytes) {
+    if (!bytes) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    let val = bytes;
+    while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+    return `${i > 1 ? val.toFixed(1) : Math.round(val)} ${units[i]}`;
+  }
 
-      try {
-        const startRes = await fetch(`${API_BASE}/api/download/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: url })
-        });
+  function fmtDuration(sec) {
+    if (!sec) return '';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
 
-        const startData = await startRes.json();
-        if (!startRes.ok || (!startData.task_id && !startData.direct_url)) {
-          throw new Error(startData.error || 'Failed to start download.');
-        }
+  function triggerDownload(url, filename) {
+    const a = document.createElement('a');
+    a.href = url;
+    if (filename) a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
 
-        // Direct stream URL returned immediately (e.g. on Vercel)
-        if (startData.direct_url) {
-          button.disabled = false;
-          progressBar.value = 100;
-          const fname = startData.filename || 'video.mp4';
-          status.textContent = `Completed 100%! Ready to save: ${fname}`;
-          downloadLink.innerHTML = `<p><a href="${startData.direct_url}" download="${fname}" target="_blank">Click here to save video file directly</a></p>`;
-          window.location.href = startData.direct_url;
-          return;
-        }
+  function startLocalOrProxyDownload(videoUrl, formatId) {
+    inspectBtn.disabled = true;
+    quickBtn.disabled = true;
+    progressBar.hidden = false;
+    progressBar.value = 0;
+    setStatus('Preparing download...');
 
-        const taskId = startData.task_id;
-
-        const interval = setInterval(async () => {
-          try {
-            const progRes = await fetch(`${API_BASE}/api/download/progress/${taskId}`);
-            const prog = await progRes.json();
-
-            if (prog.status === 'downloading') {
-              progressBar.value = prog.percent;
-              let txt = `Downloading: ${prog.percent_str}`;
-              if (prog.speed) txt += ` (${prog.speed})`;
-              if (prog.eta) txt += ` - ETA: ${prog.eta}`;
-              status.textContent = txt;
-            } else if (prog.status === 'merging') {
-              progressBar.value = 100;
-              status.textContent = 'Merging video and audio... 100%';
-            } else if (prog.status === 'finished') {
-              clearInterval(interval);
-              button.disabled = false;
-              progressBar.value = 100;
-
-              if (prog.direct_url) {
-                status.textContent = `Completed 100%! Ready to save: ${prog.filename}`;
-                downloadLink.innerHTML = `<p><a href="${prog.direct_url}" download="${prog.filename}" target="_blank">Click here to save video file directly</a></p>`;
-                window.location.href = prog.direct_url;
-              } else {
-                status.textContent = `Completed 100%! Saved to Downloads folder: ${prog.filename}`;
-                const fileUrl = `${API_BASE}/api/file/${encodeURIComponent(prog.file_id)}`;
-                downloadLink.innerHTML = `<p><a href="${fileUrl}" download="${prog.filename}">Click here to save video file manually</a></p>`;
-                window.location.href = fileUrl;
-              }
-            } else if (prog.status === 'error') {
-              clearInterval(interval);
-              button.disabled = false;
-              progressBar.hidden = true;
-              status.innerHTML = `Error: ${prog.error}`;
-            }
-          } catch (pollErr) {
-            // keep polling
-          }
-        }, 500);
-
-      } catch (err) {
-        button.disabled = false;
-        progressBar.hidden = true;
-        status.innerHTML = 'Error: ' + err.message;
+    fetch(`${API_BASE}/api/download/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: videoUrl, format_id: formatId || null })
+    })
+    .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        throw new Error(data.error || 'Failed to start download.');
       }
-    };
-  </script>
+      if (data.proxy_url || data.direct_url) {
+        inspectBtn.disabled = false;
+        quickBtn.disabled = false;
+        progressBar.value = 100;
+        const target = data.proxy_url ? `${API_BASE}${data.proxy_url}` : data.direct_url;
+        setStatus(`Ready: ${data.filename}`);
+        triggerDownload(target, data.filename);
+        return;
+      }
+
+      const taskId = data.task_id;
+      const poll = setInterval(async () => {
+        try {
+          const pr = await fetch(`${API_BASE}/api/download/progress/${encodeURIComponent(taskId)}`);
+          const prog = await pr.json();
+          if (prog.status === 'downloading') {
+            progressBar.value = prog.percent || 0;
+            let msg = `Downloading: ${prog.percent_str || '0%'}`;
+            if (prog.speed) msg += ` (${prog.speed})`;
+            if (prog.eta) msg += ` · ETA ${prog.eta}`;
+            setStatus(msg);
+          } else if (prog.status === 'merging') {
+            progressBar.value = 100;
+            setStatus('Merging audio & video...');
+          } else if (prog.status === 'finished') {
+            clearInterval(poll);
+            inspectBtn.disabled = false;
+            quickBtn.disabled = false;
+            progressBar.value = 100;
+            setStatus(`Saved: ${prog.filename}`);
+            const fileUrl = `${API_BASE}/api/file/${encodeURIComponent(prog.file_id)}`;
+            triggerDownload(fileUrl, prog.filename);
+          } else if (prog.status === 'error') {
+            clearInterval(poll);
+            inspectBtn.disabled = false;
+            quickBtn.disabled = false;
+            progressBar.hidden = true;
+            setStatus(`Error: ${prog.error}`, true);
+          }
+        } catch (_) {}
+      }, 600);
+    })
+    .catch(err => {
+      inspectBtn.disabled = false;
+      quickBtn.disabled = false;
+      progressBar.hidden = true;
+      setStatus(`Error: ${err.message}`, true);
+    });
+  }
+
+  function renderResults(info, sourceUrl) {
+    resultsEl.textContent = '';
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const title = document.createElement('div');
+    title.className = 'meta-title';
+    title.textContent = info.title || 'Video';
+    card.appendChild(title);
+
+    const subBits = [info.extractor || 'video'];
+    if (info.duration) subBits.push(fmtDuration(info.duration));
+    subBits.push(`${info.formats.length} format${info.formats.length === 1 ? '' : 's'}`);
+    const sub = document.createElement('div');
+    sub.className = 'meta-sub';
+    sub.textContent = subBits.join(' · ');
+    card.appendChild(sub);
+
+    const ul = document.createElement('ul');
+    ul.className = 'fmt-list';
+
+    info.formats.forEach(fmt => {
+      const li = document.createElement('li');
+      li.className = 'fmt-item';
+
+      const left = document.createElement('div');
+      const lbl = document.createElement('div');
+      lbl.className = 'fmt-label';
+      lbl.textContent = fmt.label;
+      left.appendChild(lbl);
+
+      const meta = [];
+      if (fmt.filesize) meta.push(fmtSize(fmt.filesize));
+      if (fmt.needs_merge && info.is_vercel) meta.push('Video only in cloud');
+      if (meta.length) {
+        const inf = document.createElement('div');
+        inf.className = 'fmt-info';
+        inf.textContent = meta.join(' · ');
+        left.appendChild(inf);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'fmt-actions';
+
+      if (info.is_vercel) {
+        const dlLink = document.createElement('a');
+        dlLink.className = 'btn primary';
+        dlLink.textContent = 'Download';
+        dlLink.href = `${API_BASE}${fmt.proxy_url}`;
+        dlLink.download = fmt.filename || 'video.mp4';
+        actions.appendChild(dlLink);
+
+        if (fmt.direct_url) {
+          const direct = document.createElement('a');
+          direct.className = 'btn';
+          direct.textContent = 'Direct';
+          direct.href = fmt.direct_url;
+          direct.target = '_blank';
+          direct.rel = 'noopener noreferrer';
+          actions.appendChild(direct);
+        }
+      } else {
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'primary';
+        dlBtn.textContent = 'Download';
+        dlBtn.onclick = () => startLocalOrProxyDownload(sourceUrl, fmt.format_id);
+        actions.appendChild(dlBtn);
+      }
+
+      li.appendChild(left);
+      li.appendChild(actions);
+      ul.appendChild(li);
+    });
+
+    card.appendChild(ul);
+    resultsEl.appendChild(card);
+  }
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const url = urlInput.value.trim();
+    if (!url) return;
+
+    inspectBtn.disabled = true;
+    quickBtn.disabled = true;
+    progressBar.hidden = true;
+    resultsEl.textContent = '';
+    setStatus('Extracting video formats...');
+
+    try {
+      const r = await fetch(`${API_BASE}/api/inspect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const data = await r.json();
+      if (!r.ok || !data.success) {
+        throw new Error(data.error || 'Could not extract video.');
+      }
+      setStatus(`Found ${data.formats.length} downloadable option${data.formats.length === 1 ? '' : 's'}.`);
+      renderResults(data, url);
+    } catch (err) {
+      setStatus(`Error: ${err.message}`, true);
+    } finally {
+      inspectBtn.disabled = false;
+      quickBtn.disabled = false;
+    }
+  };
+
+  quickBtn.onclick = () => {
+    const url = urlInput.value.trim();
+    if (!url) {
+      urlInput.reportValidity();
+      return;
+    }
+    startLocalOrProxyDownload(url, null);
+  };
+</script>
 </body>
 </html>

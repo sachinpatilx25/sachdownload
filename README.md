@@ -1,12 +1,11 @@
-# SachDownload - Website Video Downloader
+# SachDownload - Video Downloader
 
-A minimal, lightweight web video downloader with real-time download progress tracking.
+A lightweight FastAPI + `yt-dlp` video downloader with format inspection, streaming proxy, HLS segment joining, and local progress tracking.
 
 ## Features
-- Minimalist, pure HTML interface (no CSS bloat).
-- Live download percentage (%), speed, and ETA updates.
-- Extracts and downloads videos from any website (direct video links, HTML5 `<video>` tags, HLS/m3u8 streaming, and embedded web players).
-- Direct local download to your Downloads folder.
+- Inspects video qualities (`/api/inspect`) across direct media URLs, `yt-dlp` extractors, platform fallbacks (YouTube InnerTube, Vimeo, Dailymotion, X/Twitter, Reddit), and recursive `<iframe>` embeds.
+- Streaming proxy (`/api/proxy`) with SSRF protection, `Range` forwarding, and live HLS `.m3u8` segment joining (`.ts` and fMP4 `#EXT-X-MAP` / `#EXT-X-BYTERANGE`) so downloads work cleanly from Vercel without exposing IP-locked or hotlink-blocked upstream URLs.
+- Local unrestricted mode (`python server.py` or `start.bat`) using verified system `ffmpeg` + `yt-dlp` for full 1080p/4K video+audio merging and live download progress.
 
 ## Running Locally
 
@@ -25,6 +24,3 @@ python server.py
 ```
 http://localhost:8000
 ```
-
-## Note on Deployment (Vercel vs. Persistent Servers)
-Vercel is a serverless platform with a 15-second execution limit and a read-only filesystem. Since video extraction, downloading, and ffmpeg remuxing often take several minutes, deploying on persistent server environments such as **Render**, **Railway**, **Fly.io**, or running **locally** is recommended for full functionality.
